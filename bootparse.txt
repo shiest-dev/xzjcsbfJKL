@@ -1,0 +1,133 @@
+def _parse(self, data):
+    raw_html = html.unescape(data)
+
+    def to_float(value):
+        if value is None:
+            return None
+
+        try:
+            return float(str(value).replace(",", "").strip())
+        except:
+            return None
+
+    def parse_usd(text):
+        if not text:
+            return None
+
+        m = re.search(r'\$([\d,]+(?:\.\d+)?)', text)
+        return to_float(m.group(1)) if m else None
+
+    def parse_percent(text):
+        if not text:
+            return None
+
+        m = re.search(r'([\d,]+(?:\.\d+)?)%', text)
+        return to_float(m.group(1)) if m else None
+
+    result = {
+        "status": "Unavailable",
+
+        "ton": None,
+        "usd": None,
+
+        "highest_bid_ton": None,
+        "highest_bid_usd": None,
+
+        "bid_step_ton": None,
+        "bid_step_percent": None,
+        "bid_step_text": None,
+
+        "min_bid_ton": None,
+        "min_bid_usd": None,
+
+        "buy_now_ton": None,
+        "ends_at": None
+    }
+
+    status_match = re.search(
+        r'tm-section-header-status[^"]*">([^<]+)<',
+        raw_html,
+        re.S
+    )
+
+    if status_match:
+        result["status"] = status_match.group(1).strip()
+
+    status_lower = result["status"].lower()
+
+    ends_match = re.search(
+        r'<time[^>]*class="tm-countdown-timer"[^>]*datetime="([^"]+)"',
+        raw_html,
+        re.S
+    )
+
+    if ends_match:
+        try:
+            result["ends_at"] = int(
+                datetime.fromisoformat(
+                    ends_match.group(1)
+                ).astimezone(timezone.utc).timestamp()
+            )
+        except:
+            pass
+
+    cell_matches = re.findall(
+        r'<div class="table-cell[^"]*">.*?'
+        r'<div class="table-cell-value[^"]*">\s*(.*?)\s*</div>.*?'
+        r'<div class="table-cell-desc">\s*(.*?)\s*</div>.*?'
+        r'</div>',
+        raw_html,
+        re.S
+    )
+
+    for ton_raw, desc_raw in cell_matches:
+        ton_text = re.sub(r"<.*?>", "", ton_raw).strip()
+        desc_text = re.sub(r"<.*?>", "", desc_raw).strip()
+
+        desc_lower = desc_text.lower()
+
+        ton_value = to_float(ton_text)
+        usd_value = parse_usd(desc_text)
+
+        if "highest bid" in desc_lower:
+            result["highest_bid_ton"] = ton_value
+            result["highest_bid_usd"] = usd_value
+
+        elif "minimum bid" in desc_lower or "min bid" in desc_lower:
+            result["min_bid_ton"] = ton_value
+            result["min_bid_usd"] = usd_value
+
+        elif "bid step" in desc_lower:
+            result["bid_step_ton"] = ton_value
+            result["bid_step_percent"] = parse_percent(desc_text)
+            result["bid_step_text"] = desc_text
+
+        elif result["ton"] is None:
+            result["ton"] = ton_value
+            result["usd"] = usd_value
+
+    buy_now_match = re.search(
+        r'js-buy-now-btn[^>]*data-bid-amount="([\d,]+(?:\.\d+)?)"',
+        raw_html,
+        re.S
+    )
+
+    if not buy_now_match:
+        buy_now_match = re.search(
+            r'Buy for.*?([\d,]+(?:\.\d+)?)',
+            raw_html,
+            re.S
+        )
+
+    if buy_now_match:
+        result["buy_now_ton"] = to_float(buy_now_match.group(1))
+
+    if (
+        status_lower == "on auction"
+        and result["highest_bid_ton"] is None
+        and result["min_bid_ton"] is not None
+    ):
+        result["highest_bid_ton"] = result["min_bid_ton"]
+        result["highest_bid_usd"] = result["min_bid_usd"]
+
+    return result
